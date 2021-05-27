@@ -1,0 +1,385 @@
+\documentclass[11pt]{article}
+\title{Survival Analysis Project}
+\author{Xingyu Zhou}
+\usepackage{Sweave}
+\usepackage{amsmath}
+\usepackage{geometry}
+\geometry{left=3cm,right=3cm,top=3cm,bottom=3cm}
+\SweaveOpts{pdf=TRUE, eps=FALSE}
+
+
+
+\begin{document}
+\SweaveOpts{concordance=TRUE}
+\date{\today}
+\maketitle
+
+
+\section{Introduction}
+Recent research has shown some evidence on the advantage on building the gut flora via breast-feeding for newborns. Breast-feeding initiation rates have increased in the USA; however, maintenance of breast-feeding for the recommended duration (six months) is low. It is desirable to model the the duration for better understanding the factors affecting the period and making corresponding solution to enlength this period. In this study, we will build a survival model on the duration of breastfeeding.  
+
+The Infant Feeding Practices Study II (IFPS II), conducted by the Food and Drug Administration (FDA) and the Centers for Disease Control and Prevention (CDC) from 2005 to 2007, was a longitudinal study that followed mother-infant pairs from the third trimester of pregnancy throughout the first year of life to study a variety of infant feeding practices. The data set that we will analyze is a subset of the IFPS II data consisting of first-time mothers who breastfed their children. Several types of variables, which may be predictive of breastfeeding duration, are provided: demographics, income/work, prenatal attitudes towards breastfeeding, and neonatal breastfeeding experiences (within the first two weeks of life). There are 762 subjects and 40 variables recorded.
+
+%....................................................................
+\section{Methods}
+\subsection{overview}
+<<echo=FALSE>>=
+library(survival)
+library(dplyr)
+library(visreg)
+dat <- read.table("7210f19.txt", header = TRUE, sep = "\t") %>%
+    mutate(duration = as.numeric(as.Date(BfStop)-as.Date(BfStart))) %>%
+    mutate(deathindi = ifelse(Censored==0,1,0)) %>%
+    mutate(totalproblem = as.numeric(Latching+Choking+WouldntWake+NoInterest+Distract+TooOften+Weight+Nipples+NoMilk+TooLong+Flow+Overfull+Yeast+Clog+Infect+Leak)) %>%
+    mutate(totalproblem1 = ifelse(totalproblem!=9, totalproblem, 8)) %>%
+    select(-"BfStop", -"BfStart", -"Censored", -"totalproblem")
+@
+In the original dataset, we recoreded the start and end date of breastfeeding. We will use the time difference as the duration and consider the right cencoring to be independent of the duration. I also created a summary covariate called "totalproblem" which is the number of problems met in the first two weeks of breastfeeding ( capped at 8 since not enough data to estimate the partial likelihood at 9). Out of 762 subjects, only 38.32\% breastfed for more than 180 days. Generally speaking, there are two groups of covariates. The first group represents mothers's belief of the advantages of breastfeeding which should enlength the duration. The second group represents the bad feelings and difficulties which should shorten the duration.  
+It is not realistic to assume a parametric model here (not good fit from diagnostic), so we will use the nonparametric proportional hazard model (Cox) in the following discussion.  
+
+A brief description and abbreviation are shown below:
+\begin{itemize}
+\item BfStart, BfStop: Starting and ending dates of breastfeeding (possibly right-censored)
+\item Censored: 1 if censored
+\item Education: HS or less / Some college / College graduate
+\item Race: White / Black / Asian / Other
+\item Hispanic: 1 if Spanish / Hispanic descent
+\item Income: Annual income as percentage of poverty level
+\item HSize: Household size (including mother, not including baby)
+\item Age: Age in years
+\item Married: 1 if married
+\item FamWork, NonFamWork, WithWork, HomeWork: (P27) Response to "What will you do with your baby while you are working?" Respondents could check multiple boxes, or no boxes (if they do not plan on working).
+ExpectStop: (P31) "How old do you think your baby will be when you completely stop breastfeeding?" (in months)
+\item Confidence: (P32) "How confident are you that you will be able to breastfeed until the baby is the age you marked in P31?"
+\item BestWay: (P34) "The best way to feed a baby is" Breastfeeding / Mix / Formula / BothOK
+\item FormulaGood: (P35A) "Infant formula is as good as breast milk"
+\item EarInf: (P35B) "If a baby is breastfed, he or she will be less likely to get ear infections"
+\item RespInf: (P35C) "If a baby is breastfed he or she will be less likely to get a respiratory illness"
+\item Diar: (P35D) "If a baby is breastfed he or she will be less likely to get diarrhea"
+\item Obese: (P35F) "If a child was breastfed, he or she will be less likely to become obese"
+\item Satisfaction: (P31) "How would you say you felt about breastfeeding during the first week you were breastfeeding?" 5 = "Liked very much"
+\end{itemize}
+
+\subsection{Choose covariates and appropriate functional form}
+In this section, we will choose the appropriate funcional form for the significant or important covariates using AIC. Basically, we will fit a linear model first. Then analyzing each group of covariates using deviance residual plot. The covariates are added into the model one by one. At the end of this section, a plot of deviance residual and a table of AIC could be found.
+\subsubsection{Age}
+From the residual plot, we can see that there seems a transition at around 27. The deviance becomes higher both when age is less than 27 and greater than 27 as shown in Figure 1. A quadratic function of age should work pretty well in this case. And indeed the AIC goes from 6439.149 to 6423.163 by adding the quadratic term of age. Howeverm, the line could be linear before and after age 27. Using piecewise linear function of age with a changepoint at 27 furthur reduced the AIC to 6420.294. At last, use a flat line after 27 will drop our AIC to 6418.945. The total drop in BIC is much larger than 2 which means the new functional form is much better than the original linear form.
+Thus, our choice of functional form for age is a linear before age 27 and flat after that.
+<<echo = FALSE, results=hide>>=
+fit <- coxph(Surv(duration, deathindi)~., data=dat)
+
+autofit <- function(base, covariates1, covariates2){
+    formu1 <- as.formula(paste0("Surv(duration, deathindi)~", base, covariates1))
+    basefit <- coxph(formu1, dat)
+    plot(residuals(basefit,type="deviance")~dat[,covariates1], xlab = covariates1,ylab = "deviance")
+    lines(lowess(dat[,covariates1], residuals(basefit,type="deviance")), col='red', lwd=3)
+    
+    formu2 <- as.formula(paste0("Surv(duration, deathindi)~", base, covariates2))
+    fit2 <- coxph(formu2, dat)
+    #plot(residuals(fit2,type="deviance")~byar[,covariates1], xlab = covariates1,ylab = "deviance")
+    #lines(lowess(byar[,covariates1], r), col='red', lwd=3)
+    
+    print(AIC(fit2, basefit))
+    print(AIC(basefit)-AIC(fit2))
+    summary(fit2)
+}
+
+
+age1 <- function(x) pmin(x,27)
+age2 <- function(x) pmax(x,27)
+autofit("","Age","age1(Age)")
+
+f1 <- coxph(Surv(duration, deathindi)~ age1(Age), data=dat)
+#fit1 <- coxph(Surv(duration, deathindi)~ age1(Age), data=dat)
+#visreg(fit1,"Age", ylab="Hazard ratio", trans=exp)
+@
+
+\subsubsection{Education}
+From the deviance plot, we can see that "HS or less" and some college are similar. Thus we try to combine them together. This will actually increase the AIC by 2.257921. So we keep the original three level factor in the model. 
+<<echo = F, results=hide>>=
+edu <-function(x) ifelse(x == "College graduate", "collegegraduate","lessthanCG")
+autofit("age1(Age)+", "Education", "edu(Education)")
+f2 <- coxph(Surv(duration, deathindi)~ age1(Age) + Education, data=dat)
+@
+
+\subsubsection{Race}
+The pvalue for coefficients of race are all greater then 0.05 and drop the race will decrease AIC by 4.365428 so we drop race from our model. This is reasonable since no matter what race the mother is, the way of breastfeeding and love for child will not change.
+<<echo = F, results=hide>>=
+autofit("age1(Age)+Education+","Race", "Race")
+
+@
+
+\subsubsection{Hispanic}
+This term is similar to race. Drop it to decrease AIC further.
+<<echo = F, results=hide>>=
+autofit("age1(Age)+Education+","Hispanic", "Hispanic")
+@
+
+\subsubsection{Income}
+From the deviance plot in Figure 1, we can see that the trend is nonlinear. A simple function cannot capture the relationship. So we choose spline to model this term. The AIC dropped for 3.723254.
+<<echo = F, results=hide>>=
+autofit("age1(Age)+Education+","Income", "pspline(Income)")
+f3 <- coxph(Surv(duration, deathindi)~ age1(Age) + Education+pspline(Income), data=dat)
+@
+
+\subsubsection{Housesize}
+The deviance for house size seems complecated. Functional forms tried are piecewise linear and spline but none of them will help decrease the AIC. Drop this term will produce similar AIC. Thus, we decided to drop this term.
+<<echo = F, results=hide>>=
+autofit("age1(Age)+Education+pspline(Income)+","HSize", "HSize")
+hsize1 <- function(x) pmin(x,2)
+hsize2 <- function(x) pmax(2,x)
+@
+
+\subsubsection{Married}
+This term is significant. No patterns in the deviance plot. Keep it as a two level factor.
+<<echo = F, results=hide>>=
+autofit("age1(Age)+Education+pspline(Income)+","Married", "Married")
+f4 <- coxph(Surv(duration, deathindi)~ age1(Age) + Education+pspline(Income)+Married, data=dat)
+@
+
+\subsubsection{FamWork, NonFamWork, WithWork, HomeWork}
+By analyzing these four terms, I found that Farmwork and NonFarwork are significant and have similar effect. So I will combine the two together as a new term "otherwork" which means that the mother will work and have somebody else to care for the baby. The term With work is not significant so we drop it. The term Homework is significant so we keep it.  
+In summary, this new formulation will drop the AIC by 3.183 which is good enough.
+<<echo = F, results=hide>>=
+otherwork <- function(x,y) x|y
+f5 <- coxph(Surv(duration, deathindi)~ age1(Age) + Education+pspline(Income)+Married+otherwork(FamWork,NonFamWork) + HomeWork, data=dat)
+@
+
+\subsubsection{ExpectStop}
+From the dianostic plot in Figure 1, there seems to be a piecewise linear with changing point around 12. This will drop the AIC by 3. Thus we choose this functional form.
+<<echo = F, results=hide>>=
+expstop1 <- function(x) pmin(x,12)
+expstop2 <- function(x) pmax(x,12)
+autofit("age1(Age)+Education+pspline(Income)+Married+ otherwork(FamWork,NonFamWork) + HomeWork+","ExpectStop", "expstop1(ExpectStop)+expstop2(ExpectStop)")
+f6 <- coxph(Surv(duration, deathindi)~ age1(Age) + Education+pspline(Income)+Married+otherwork(FamWork,NonFamWork) + HomeWork+ expstop1(ExpectStop)+expstop2(ExpectStop), data=dat)
+@
+
+\subsubsection{Confidence}
+The deviance plot of Confidence seems OK. So we keep the linear term of confidence.
+<<echo = F, results=hide>>=
+autofit("age1(Age)+Education+pspline(Income)+Married+otherwork(FamWork,NonFamWork) + HomeWork+ expstop1(ExpectStop)+expstop2(ExpectStop)+", "Confidence", "Confidence")
+f7 <- coxph(Surv(duration, deathindi)~ age1(Age) + Education+pspline(Income)+Married+otherwork(FamWork,NonFamWork) + HomeWork+ expstop1(ExpectStop)+expstop2(ExpectStop)+ Confidence, data=dat)
+@
+
+\subsubsection{BestWay}
+The opinion of mothe seems to have a large effect on the duration. There seems to be two major group- breastfeeding is best or other. So we formulate this term into a binary factor -- either breastfeeding or others. This will decrease the AIC by 1.046909. Parsimonious model is prefered personally.
+<<echo = F, results=hide>>=
+bestway <- function(x) ifelse(x=="Breastfeeding", 1,0)
+autofit("age1(Age)+Education+pspline(Income)+Married+otherwork(FamWork,NonFamWork) + HomeWork+ expstop1(ExpectStop)+expstop2(ExpectStop)+Confidence+", "BestWay", "bestway(BestWay)")
+
+f8 <- coxph(Surv(duration, deathindi)~ age1(Age) + Education+pspline(Income)+Married+otherwork(FamWork,NonFamWork) + HomeWork+ expstop1(ExpectStop)+expstop2(ExpectStop)+ Confidence + bestway(BestWay), data=dat)
+@
+
+\subsubsection{FormulaGood}
+No clear pattern in this term. I will keep it as linear.
+<<echo = F, results=hide>>=
+autofit("age1(Age)+Education+pspline(Income)+Married+otherwork(FamWork,NonFamWork) + HomeWork+ expstop1(ExpectStop)+expstop2(ExpectStop)+Confidence+bestway(BestWay)+", "FormulaGood", "FormulaGood")
+f9 <- coxph(Surv(duration, deathindi)~ age1(Age) + Education+pspline(Income)+Married+otherwork(FamWork,NonFamWork) + HomeWork+ expstop1(ExpectStop)+expstop2(ExpectStop)+ Confidence + bestway(BestWay)+FormulaGood, data=dat)
+
+@
+
+\subsubsection{EarInf,RespInf,Diar,Obese}
+Among these terms, only Diar is close to significant. So we only include the term Diar.
+<<echo = F, results=hide>>=
+autofit("age1(Age)+Education+pspline(Income)+Married+otherwork(FamWork,NonFamWork) + HomeWork+ expstop1(ExpectStop)+expstop2(ExpectStop)+Confidence+bestway(BestWay)+FormulaGood+", "Diar", "Diar")
+f10 <- coxph(Surv(duration, deathindi)~ age1(Age) + Education+pspline(Income)+Married+otherwork(FamWork,NonFamWork) + HomeWork+ expstop1(ExpectStop)+expstop2(ExpectStop)+ Confidence + bestway(BestWay)+FormulaGood + Diar, data=dat)
+@
+
+\subsubsection{Satisfaction}
+This term is significant and no simple transformation will make it better. So we keep it as linear term.
+<<echo = F, results=hide>>=
+autofit("age1(Age)+Education+pspline(Income)+Married+otherwork(FamWork,NonFamWork) + HomeWork+ expstop1(ExpectStop)+expstop2(ExpectStop)+Confidence+bestway(BestWay)+FormulaGood+Diar+", "Satisfaction", "pspline(Satisfaction)")
+f11 <- coxph(Surv(duration, deathindi)~ age1(Age) + Education+pspline(Income)+Married+otherwork(FamWork,NonFamWork) + HomeWork+ expstop1(ExpectStop)+expstop2(ExpectStop)+ Confidence + bestway(BestWay)+FormulaGood + Diar + Satisfaction, data=dat)
+@
+
+\subsection{Problems in the first two weeks}
+There are several 0/1 indicator variables for boxes that the mother may have checked in response to question N36, "Did you have any of the following problems breastfeeding your baby during your first 2 weeks of breastfeeding?" Most of them are not significant, I will only keep a few important ones: NoInterest, TooLong, Yeast and the summary statistic that I created.
+<<echo=F>>=
+f12 <- coxph(Surv(duration, deathindi)~ age1(Age) + Education+pspline(Income)+Married+otherwork(FamWork,NonFamWork) + HomeWork+ expstop1(ExpectStop)+expstop2(ExpectStop)+ Confidence + bestway(BestWay)+FormulaGood + Diar + Satisfaction+ NoInterest + TooLong + Yeast+ totalproblem1, data=dat)
+@
+
+
+
+\begin{figure}[h!]
+<<echo = FALSE, results=hide, fig=TRUE, height = 10, width=8>>=
+fit1 <- coxph(Surv(duration, deathindi)~age1(Age)+Education+pspline(Income)+Married+otherwork(FamWork,NonFamWork) + HomeWork+ expstop1(ExpectStop)+expstop2(ExpectStop)+ Confidence + bestway(BestWay)
+              +FormulaGood + Diar +Satisfaction + NoInterest + TooLong + Yeast+ totalproblem1, data=dat)
+par(mfrow = c(5,2))
+autofit("","Age","Age + I(Age^2)")
+autofit("age1(Age)+", "Education", "edu(Education)")
+autofit("age1(Age)+Education+", "Race", "Race")
+autofit("age1(Age)+Education+","Income", "pspline(Income)")
+autofit("age1(Age)+Education+pspline(Income)+Married+ otherwork(FamWork,NonFamWork) + HomeWork+","ExpectStop", "expstop1(ExpectStop)+expstop2(ExpectStop)")
+autofit("age1(Age)+Education+pspline(Income)+Married+otherwork(FamWork,NonFamWork) + HomeWork+ expstop1(ExpectStop)+expstop2(ExpectStop)+", "Confidence", "Confidence")
+autofit("age1(Age)+Education+pspline(Income)+Married+otherwork(FamWork,NonFamWork) + HomeWork+ expstop1(ExpectStop)+expstop2(ExpectStop)+Confidence+", "BestWay", "bestway(BestWay)")
+autofit("age1(Age)+Education+pspline(Income)+Married+otherwork(FamWork,NonFamWork) + HomeWork+ expstop1(ExpectStop)+expstop2(ExpectStop)+Confidence+bestway(BestWay)+", "FormulaGood", "FormulaGood")
+autofit("age1(Age)+Education+pspline(Income)+Married+otherwork(FamWork,NonFamWork) + HomeWork+ expstop1(ExpectStop)+expstop2(ExpectStop)+Confidence+bestway(BestWay)+FormulaGood+Diar+", "Satisfaction", "pspline(Satisfaction)")
+
+@
+\caption{Residual plots}
+\end{figure}
+
+\newpage
+
+\subsection{Interaction}
+We now consider two-way interactions. Since the one of the aims of this study is to check whether the neonatal breastfeeding experiences on breastfeeding duration affect certain types of mother more than others, we focus on the interactions between these experience and mother types. We tried adding the interaction between total number of problems and other pre-pregnancy beliefs and check whether there is a drop of AIC of 2 or more.  
+
+The result is that most of the interaction is not useful. However, the interaction between satisfaction and totalnumber of problems droped the AIC by 10. So we keep this interaction in the model.
+
+
+<<echo = F, results=hide>>=
+fi1 <- coxph(Surv(duration, deathindi)~age1(Age)+Education+pspline(Income)+Married+otherwork(FamWork,NonFamWork) + HomeWork+ expstop1(ExpectStop)+expstop2(ExpectStop)+ Confidence + bestway(BestWay)
+              +FormulaGood + Diar +Satisfaction + NoInterest + TooLong + Yeast+ totalproblem1 + totalproblem1:Satisfaction, data=dat)
+@
+
+
+
+
+
+<<echo = F, results=tex>>=
+library(xtable)
+aic <- round(c(AIC(f1),AIC(f2),AIC(f3),AIC(f4),AIC(f5),AIC(f6),AIC(f7),AIC(f8),AIC(f9),AIC(f10),AIC(f11),AIC(f12),AIC(fi1)), digits = 3)
+bic <- round(c(BIC(f1),BIC(f2),BIC(f3),BIC(f4),BIC(f5),BIC(f6),BIC(f7),BIC(f8),BIC(f9),BIC(f10),BIC(f11),BIC(f12),BIC(fi1)), digits = 3)
+model <- c("age1(Age)","age1(Age)+Education","age1(Age)+Education+pspline(Income)","age1(Age)+Education+pspline(Income)+Married","age1(Age)+Education+pspline(Income)+Married+otherwork+  Homework","age1(Age)+Education+pspline(Income)+Married+otherwork + HomeWork+ expstop1(ExpectStop)+expstop2(ExpectStop)","age1(Age)+Education+pspline(Income)+Married+otherwork + HomeWork+ expstop1(ExpectStop)+expstop2(ExpectStop)+ Confidence","age1(Age)+Education+pspline(Income)+Married+otherwork + HomeWork+ expstop1(ExpectStop)+expstop2(ExpectStop)+ Confidence + bestway(BestWay)","age1(Age)+Education+pspline(Income)+Married+otherwork + HomeWork+ expstop1(ExpectStop)+expstop2(ExpectStop)+ Confidence + bestway(BestWay)+FormulaGood","age1(Age)+Education+pspline(Income)+Married+otherwork + HomeWork+ expstop1(ExpectStop)+expstop2(ExpectStop)+ Confidence + bestway(BestWay)+FormulaGood + Diar","age1(Age)+Education+pspline(Income)+Married+otherwork + HomeWork+ expstop1(ExpectStop)+expstop2(ExpectStop)+ Confidence + bestway(BestWay) +FormulaGood + Diar +Satisfaction","age1(Age)+Education+pspline(Income)+Married+otherwork + HomeWork+ expstop1(ExpectStop)+expstop2(ExpectStop)+ Confidence + bestway(BestWay) +FormulaGood + Diar +Satisfaction + NoInterest + TooLong + Yeast+ totalproblem1","age1(Age)+Education+pspline(Income)+Married+otherwork + HomeWork+ expstop1(ExpectStop)+expstop2(ExpectStop)+ Confidence + bestway(BestWay) +FormulaGood + Diar +Satisfaction + NoInterest + TooLong + Yeast+ totalproblem1 + totalproblem1:Satisfaction")
+table <- cbind(model,aic,bic)
+
+colnames(table) <- c("Models", "AIC", "BIC")
+table <- as.data.frame(table)
+print(xtable(table, caption = "AIC and BIC for the models considered", align = "rp{12cm}rr", auto = TRUE),table.placement = "!h")
+@
+\newpage
+\subsection{Model Diagnosis}
+We then use diagonostic tools to check possible violation of assumptions.  
+
+First, we check the deviance residual plot which shows no big problem. The largest deviance is about 3SD.  
+
+Second, we check the proportional hazard assumption by testing whether the correlation between time and Schoenfeld residual is zero. The p-value for age, Education, Income, Nointerest, TooOften, totalproblem are less than 0.05 so there are some serious violation of this assumption. We should add the time varying coefficients into the model. By adding the tt transformation of the terms and then comparing the AIC of new model and old model, we finally choosed to add linear time-varying coefficients for age and TooLong. The AIC drops from 6151.383 to 6140.715.
+<<echo=F, results=hide>>=
+plot(dat$duration, residuals(fi1,type = "deviance"), pch=19, bty='n', las=1,
+     xlab='Time', ylab='Deviance residual')
+
+cox.zph(fi1)
+fit2 <- coxph(Surv(duration, deathindi)~age1(Age)+tt(age1(Age))+Education+ pspline(Income)+Married+otherwork(FamWork,NonFamWork) + HomeWork+ expstop1(ExpectStop)+expstop2(ExpectStop)+ Confidence + bestway(BestWay)+FormulaGood + Diar +Satisfaction + NoInterest + tt(TooLong)+TooLong + Yeast+ totalproblem1+ totalproblem1:Satisfaction, data=dat, tt =function(x,t,...){x*t})
+@
+However, adding time varying coefficients term change the number of rows of model matrix, which will make it hard to interpret the model. So in the following discussion, we still use the model without time-varying coefficients. We will discuss the time effect seperately for those terms that may have time-varying coefficients.
+
+\section{Results}
+<<echo = F, results=tex>>=
+tab1 <- as.table(cbind(summary(fi1)[[9]],summary(fi1)[[7]][,6]))
+colnames(tab1)[5] <- "pvalue"
+xtab1 <- xtable(tab1, caption = "Coefficients, CI and pvalue", auto = TRUE, digits = 3)
+print(xtab1,table.placement = "!h")
+@
+Our results is based mainly on Model 13 from Table 1. The summary statistic is provided in Table 2. From Table 2, we can see the exponential of coefficients(hazard ratio) and corresponding 95\% confidence interval and p-value. Generally speaking, exponential of coefficients(hazard ratio) means that when this term increases one unit, the hazard will become hazard ratio times of the hazard before. So a hazard ratio of one above means that this term will increase the hazard. A p-value less than 0.05 is considered significant effect in the model. Some term needs more careful explanation which is shown below. In Figure 2, you can find the visualization of the terms mentioned below.
+\subsection{Age}
+From Figure 2, the hazard ratio is decreasing as age increases until 27 years old. That is to say, for young women who is younger than 27, the hazard decreased by about 10\% for one year increase in age. Age does not affect the hazard ratio after age 27.  This term is super significant.
+
+If we consider the time-varying effect of age, we can see that the linear term of time effect for age is positive, which means that the effect of time (decreasing the HZ) is decreasing as duration increases. That is to say, age is less important in the latter period of breastfeeding compared to the early period.
+
+\subsection{Education}
+From Figure 2, the HZ is lowest for college graduate and them some college and then High school or less. That is to say, higher education level will decrease the hazard of stopping breastfeeding which makes sense. A well educated women is more likely to know the benefits of breastfeeding and is more likely to have a higher household income to support breastfeeding. Specifically, the hazard of HS or less is about 70\% more than college graduate. The hazard of some college is about 40\% more than college graduate. This term is significant.
+
+\subsection{Income}
+From Figure 2, the HZ of income is complecated. One trend is that low to middium income women is less likely to stop breastfeeding. A possible explanation is that high income women tend to continue their work. Extremely low income women may have to work to support the family. This term is significant.
+
+\subsection{Married}
+Married women are less likely to stop breastfeeding. The hazard of married women is about 84\% of the single mother. This term is significant.
+
+\subsection{Work}
+Women who think that ask some else to take care of their baby are more likely to stop breastfeeding. The hazard is about 40\% more then mother who does not approve others taking care of their baby.
+Women who think that work at home is OK are less likely to stop breastfeeding. The hazard is about 53\% of the mothers don't think this way.  
+
+This term is significant.
+
+\subsection{ExpectStop}
+Generally speaking, the hazard of stop breastfeeding is lower for women whose epectation of breastfeeding is longer. Their is a changepoint of the effect intensity at 12 months. Before 12 months, the effect of longer is much stronger then after 12 months. For one month longer in belief, the hazard will decrease by about 11\% before 12 months and about 6\% after 12 months. This term is significant.
+
+\subsection{Confidence}
+Women with greater confidence to fulfill their expected period of breastfeeding is less likely to stop breastfeeding. The hazard decrease by 11\% for one more point in the questionare. This term is significant.
+
+\subsection{Bestway}
+Women beleve that breastfeeding is the best way to feed a bady are less likely to stop breastfeeding. The hazard is about 86\% of the hazard for women who do not think this way. This term is significant.
+
+\subsection{FormulaGood}
+Women believe that formula is good are more likely to stop breastfeeding. The hazard increases by about 8\% for one more point in the questionare. This term is borderly significant.
+
+\subsection{Diar}
+Women believe that breastfeeding will reduce baby's diarrhea are less likely to stop breastfeeding. The hazard decreases by about 11\% for one more point in the questionare. This term is borderly significant.
+
+\subsection{Nointerest}
+In the first two weeks of breastfeeding, women who experciend that the bady is not interested in breastfeeding are more likely to stop breastfeeding. The hazard increases by about 90\%. This term is borderly significant.
+
+\subsection{TooLong}
+In the first two weeks of breastfeeding, women who experciend that the bady asked for breastfeeding too long are more likely to stop breastfeeding.  The hazard increases by about 120\%. This term is significant.
+
+There is a significant time effect in this term. When the duration get loner, this problem is less inimportant. This makes sense since baby may ask for breastfeeding very long when they are super young. However, when time goes by, babies are going to have a stable breastfeeding demand anyway.
+
+\subsection{Yeast}
+In the first two weeks of breastfeeding, women who experciend yeast infection are more likely to stop breastfeeding. The hazard increases by about 108\%. This term is significant.
+
+
+\begin{figure}[h!]
+<<echo = FALSE, results = hide,fig=T, height = 12, width=10>>=
+par(mfrow=c(5,3))
+visreg(fi1,"Age", ylab="Hazard ratio", trans=exp)
+visreg(fi1,"Education", ylab="Hazard ratio", trans=exp)
+visreg(fi1,"Income", ylab="Hazard ratio", trans=exp)
+visreg(fi1,"Married", ylab="Hazard ratio", trans=exp)
+visreg(fi1,"HomeWork", ylab="Hazard ratio", trans=exp)
+visreg(fi1,"ExpectStop", ylab="Hazard ratio", trans=exp)
+visreg(fi1,"Confidence", ylab="Hazard ratio", trans=exp)
+visreg(fi1,"BestWay", ylab="Hazard ratio", trans=exp)
+visreg(fi1,"FormulaGood", ylab="Hazard ratio", trans=exp)
+visreg(fi1,"Diar", ylab="Hazard ratio", trans=exp)
+visreg(fi1,"NoInterest", ylab="Hazard ratio", trans=exp)
+visreg(fi1,"TooLong", ylab="Hazard ratio", trans=exp)
+visreg(fi1,"Yeast", ylab="Hazard ratio", trans=exp)
+@
+\caption{Hazard ratio of the predictors}
+\end{figure}
+\newpage
+
+\subsection{Satisfaction, totalproblem and their interaction}
+The relationship between satisfaction and totalproblem is interesting here. The HZ for these two terms are shown in Figure 3.
+
+For women who are unsatisfactory about their initial experience(satisfaction = 1), a larger number of problems met means lower HZ. The reason might be that women met a lot of problems at the begining so they learn to handle them and have a low expectation of the experience. So when time goes by, their experience is going to be better and they are less likely to stop breastfeeding.  Specifically, for one more problem met, the hazard decreases by about 19\%.
+
+For women who are neutral about their initial experience(satisfaction =3), the effect is similar to the above group, but with less intensive effect on the total number of problems.  Specifically, for one more problem met, the hazard decreases by about 7\%.
+
+For women who are satisfied about their initial experience(satisfaction = 5), a larger number of problems met means slightly higher HZ. That is, women with a larger number of problems are more likely to stop breastfeeding.  Specifically, for one more problem met, the hazard increases by about 7\%.
+
+The main effects and interaction terms are significant.
+
+\begin{figure}[h!]
+<<echo = FALSE, results = hide,fig=T, height = 4, width=12>>=
+#par(mfrow=c(2,1))
+#visreg(fi1,"Satisfaction", ylab="Hazard ratio", trans=exp, by = "totalproblem1")
+visreg(fi1,"totalproblem1", ylab="Hazard ratio", trans=exp, by ="Satisfaction")
+@
+\caption{Hazard ratio for Satisfaction and totalproblem}
+\end{figure}
+
+
+
+
+\section{Discussion}
+From this study, we have a better understanding of the factors affecting the breastfeeding duration.  
+
+The demographic factors like age and education do have some significant impact. For example, higher level education will drastically decrease the hazard of stop breastfeeding.  
+
+The pre-pregnancy beliefs are important. Generally, a stronger belief in the advantages of breastfeeding will support the mothers to breastfeeding longer.  
+
+There are some symptoms of neonatal breastfeeding experience like Nointerest, Toolong will increase the hazard of stop breastfeeding a lot. Moreover, these experience have different effect on optimistic(satisfaction is high) and pessimistic(satisfaction is low) mothers.
+
+There are some issues that worth noticing. First, the author of this study is not familiar with scientific background of breastfeesing. Hence the interpretation might not be compelling and the choice of functional form might not be well supported by past researches. Second, the dataset is only a small subset of the experiment. Thus there sure are some important terms not included in this study, which means there are room for the model to improve.
+
+
+
+
+
+
+\end{document}
+
+
+
+
